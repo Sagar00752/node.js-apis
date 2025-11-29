@@ -1,6 +1,7 @@
 const { validationResult } = require('express-validator');
 const Employee = require('../models/Employee');
 const bcrypt = require('bcryptjs');
+const { enqueueEmailJob } = require('../queues/mailQueue');
 // const nodemailer = require("nodemailer");
 
 
@@ -10,67 +11,55 @@ const bcrypt = require('bcryptjs');
  * @access  Admin
  */
 async function createEmployee(req, res) {
-try {
-  console.log("Request Body:", req.body); // Debugging line
-    // ✅ Validate request body
+  try {
+    console.log("Request Body:", req.body);
+
+    // Validate
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(422).json({
         success: false,
-        message: 'Validation failed',                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           
-        errors: errors.array().map(err => ({
-          field: err.param,
-          message: err.msgsuccess
-        }))
+        message: 'Validation failed',
+        errors: errors.array().map(err => ({ field: err.param, message: err.msg }))
       });
     }
 
-    const { employeeid ,firstname, email, position, department, hireDate, salary } = req.body;
+    const { employeeid, firstname, email, position, department, hireDate, salary } = req.body;
 
-
-    //  const transporter = nodemailer.createTransport({
-    //   host: process.env.SMTP_HOST,
-    //   port: process.env.SMTP_PORT,
-    //   secure: false,
-    //   auth: {
-    //     user: process.env.SMTP_USER,
-    //     pass: process.env.SMTP_PASS
-    //   }
-    // });
-
-    //  const mailOptions = {
-    //   from: process.env.FROM_EMAIL,
-    //   to: newUser.email,
-    //   subject: "Welcome to Sagar Company",
-    //   html: `<h2>Welcome, ${newUser.firstname}!</h2>
-    //          <p>We are happy to have you in Sagar Company.</p>`
-    // };
-
-
-
-    // ✅ Check if email already exists
-    const existingUser = await Employee.findOne({ email });
-    if (existingUser) {
-      return res.status(409).json({
-        success: false,
-        message: 'Email already registered'
-      });
-    }
-
-    // ✅ Encrypt password before saving    const { name, email, password, role } = req.body;
-
-
+    // Check existing
+    // const existingUser = await Employee.findOne({ email });
+    // if (existingUser) {
+    //   return res.status(409).json({ success: false, message: 'Email already registered' });
+    // }
 
     const newUser = new Employee({
       employeeid,
       firstname,
       email,
-      position: position,
+      position,
       department,
       hireDate,
       salary
     });
     await newUser.save();
+
+    // -------- enqueue welcome email job (non-blocking) ----------
+    const emailJob = {
+      type: 'welcome_email',
+      to: newUser.email,
+      subject: 'Welcome to Sagar Company',
+      templateData: {
+        firstname: newUser.firstname,
+        employeeid: newUser.employeeid
+      },
+      createdAt: new Date().toISOString()
+    };
+
+    // best-effort enqueue (we don't block the response on sending)
+    enqueueEmailJob(emailJob).catch(err => {
+      console.warn('enqueueEmailJob failed (logged only):', err && err.message ? err.message : err);
+    });
+    // --------------------------------------------------------------
 
     return res.status(201).json({
       success: true,
@@ -88,7 +77,6 @@ try {
     });
 
   } catch (error) {
-    console.log(error);
     console.error('❌ Error creating employee:', error);
     return res.status(500).json({
       success: false,
